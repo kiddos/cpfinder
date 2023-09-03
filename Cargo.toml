@@ -1,0 +1,13 @@
+[package]
+name = "cpfinder"
+version = "0.1.0"
+edition = "2021"
+author = "kiddos"
+about = "copy paste finder"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.4.2", features = ["derive"] }
+colored = "2.0.4"
+glob = "0.3.1"
