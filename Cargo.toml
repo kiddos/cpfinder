@@ -11,3 +11,5 @@ about = "copy paste finder"
 clap = { version = "4.4.2", features = ["derive"] }
 colored = "2.0.4"
 glob = "0.3.1"
+tokio = { version = "1.32", features = ["full"] }
+tower-lsp = "0.20"
