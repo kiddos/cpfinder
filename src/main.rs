@@ -1,42 +1,19 @@
 use std::cmp::min;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io;
-use std::io::prelude::*;
-use std::io::BufReader;
 use std::path::Path;
 
-use clap::Parser;
-use clap::ValueEnum;
+use clap::{Parser, Subcommand};
 use colored::*;
-use glob::glob;
-
-#[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq)]
-enum SourceType {
-    Java,
-    Cpp,
-    C,
-    Rust,
-    Javascript,
-    Python,
-}
-
-impl std::fmt::Display for SourceType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.to_possible_value()
-            .expect("no values are skipped")
-            .get_name()
-            .fmt(f)
-    }
-}
+use cpfinder::finder::{compute_ignore_path, parse, scan_folders, CPLocation, SourceType, TrieNode};
+use cpfinder::lsp::run_lsp_server;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    root: String,
+    #[arg(help = "root folder to scan")]
+    root: Option<String>,
 
     #[arg(help = "source file type")]
-    source_type: SourceType,
+    source_type: Option<SourceType>,
 
     #[arg(
         long,
@@ -64,197 +41,40 @@ struct Args {
 
     #[arg(long, default_value_t = 30, help = "top number of results to list")]
     list_top_result: usize,
+
+    #[arg(long, default_value_t = false, help = "run as language server")]
+    lsp: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
-fn compute_ignore_path(ignore_folders: String, root_folder: &str) -> Vec<String> {
-    let mut glob_path: Vec<String> = Vec::new();
-    for f in ignore_folders.split(",") {
-        glob_path.push(
-            Path::new(root_folder)
-                .join("**")
-                .join(f)
-                .display()
-                .to_string(),
-        );
-        glob_path.push(Path::new(root_folder).join(f).display().to_string());
-    }
-
-    let mut s: Vec<String> = Vec::new();
-    for p in glob_path {
-        for entry in glob(&p).expect("fail to glob ignore path") {
-            match entry {
-                Ok(path) => {
-                    s.push(path.display().to_string());
-                }
-                Err(e) => {
-                    println!("{:?}", e);
-                }
-            }
-        }
-    }
-
-    s
+#[derive(Subcommand, Debug)]
+enum Commands {
+    #[command(about = "run as language server")]
+    Lsp,
 }
 
-fn path_starts_with(path: &str, ignore_folders: &Vec<String>) -> bool {
-    for f in ignore_folders {
-        if path.starts_with(f) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn scan_folders(
-    root_path: &Path,
-    source_files: &mut Vec<String>,
-    list_source_folder: bool,
-    ignore_folders: &Vec<String>,
-) -> Result<(), glob::PatternError> {
-    for entry in glob(root_path.to_str().unwrap())? {
-        match entry {
-            Ok(path) => {
-                let source_file = path.display().to_string();
-                if path_starts_with(&source_file, &ignore_folders) {
-                    continue;
-                }
-
-                if list_source_folder {
-                    println!("{}", path.display());
-                }
-                source_files.push(source_file);
-            }
-            Err(e) => println!("{:?}", e),
-        }
-    }
-
-    Ok(())
-}
-
-struct TrieNode {
-    children: HashMap<char, TrieNode>,
-    occurence: usize,
-}
-
-impl TrieNode {
-    fn new() -> Self {
-        Self {
-            children: HashMap::new(),
-            occurence: 0,
-        }
-    }
-
-    fn insert(&mut self, word: &str) -> usize {
-        let mut node = self;
-        for char in word.chars() {
-            let next_node = node.children.entry(char).or_insert(TrieNode::new());
-            node = next_node;
-        }
-
-        node.occurence += 1;
-        node.occurence
-    }
-}
-
-struct CPLocation {
-    filepath: String,
-    start: usize,
-    end: usize,
-}
-
-fn parse(
-    filepath: &str,
-    root: &mut TrieNode,
-    cp_locations: &mut Vec<CPLocation>,
-    min_line_count: usize,
-    min_char_count: usize,
-) -> io::Result<()> {
-    let file = File::open(filepath)?;
-    let mut reader = BufReader::new(file);
-
-    let mut comments = false;
-    let mut cp_found = false;
-    let mut start = 0;
-    let mut end = 0;
-    let mut line_num = 1;
-    let mut char_count = 0;
-    loop {
-        let mut line = String::new();
-        let len = reader.read_line(&mut line)?;
-        if len == 0 {
-            break;
-        }
-
-        line = line.trim().to_string();
-
-        if line.starts_with("/*") {
-            comments = true;
-        }
-        if line.ends_with("*/") {
-            comments = false;
-        }
-
-        if line.starts_with("//") {
-            comments = true;
-        }
-
-        let should_index = !comments && !line.is_empty();
-
-        let next_cp_found;
-        if should_index {
-            let o = root.insert(&line);
-            if o > 1 {
-                next_cp_found = true;
-            } else {
-                next_cp_found = false;
-            }
-        } else {
-            next_cp_found = false;
-        }
-
-        if next_cp_found {
-            if !cp_found {
-                start = line_num;
-            }
-            end = line_num;
-            char_count += line.len();
-
-            cp_found = true;
-        } else {
-            if cp_found {
-                let range = end - start + 1;
-                if range >= min_line_count && char_count >= min_char_count {
-                    cp_locations.push(CPLocation {
-                        filepath: filepath.to_string(),
-                        start,
-                        end,
-                    })
-                }
-            }
-
-            char_count = 0;
-            cp_found = false;
-        }
-
-        line_num += 1;
-    }
-
-    Ok(())
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
 
-    let root_folder = args.root;
-    let root_path = Path::new(&root_folder).join(format!("**/*.{}", args.source_type.to_string()));
-    // println!("{}", root_path.display());
+    if args.lsp || matches!(args.command, Some(Commands::Lsp)) {
+        run_lsp_server().await;
+        return;
+    }
 
-    let ignore_folders = compute_ignore_path(args.ignore_folders, &root_folder);
-    // println!("ignore folders:");
-    // for f in &ignore_folders {
-    //     println!("{}", f);
-    // }
+    let (root_folder, source_type) = match (args.root, args.source_type) {
+        (Some(r), Some(st)) => (r, st),
+        _ => {
+            eprintln!("Error: <ROOT> and <SOURCE_TYPE> are required unless running in --lsp mode.");
+            std::process::exit(1);
+        }
+    };
+
+    let root_path = Path::new(&root_folder).join(format!("**/*.{}", source_type.to_string()));
+
+    let ignore_folders = compute_ignore_path(&args.ignore_folders, &root_folder);
 
     let mut source_files: Vec<String> = Vec::new();
     scan_folders(
@@ -266,14 +86,14 @@ fn main() {
     .ok();
 
     let n = source_files.len();
-    println!("found {} source files of java", n);
+    println!("found {} source files of {}", n, source_type);
 
     let mut root = TrieNode::new();
     let mut cp_locations: Vec<CPLocation> = Vec::new();
     if n > 0 {
-        for i in 0..n {
+        for source_file in &source_files {
             parse(
-                &source_files[i],
+                source_file,
                 &mut root,
                 &mut cp_locations,
                 args.min_line_count,
