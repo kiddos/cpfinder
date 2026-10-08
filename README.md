@@ -72,6 +72,8 @@ The LSP server uses the following default detection settings:
 * **`--ignore-folders`**: Comma-separated folder names/patterns to exclude from scanning.
   * **CLI Default**: `thirdparty,test,node_modules`
   * **LSP Default Ignored Folders**: `thirdparty,test,node_modules,target,.git`
+* **`max_file_size`**: Maximum file size in bytes to index and analyze in LSP mode. Files larger than this threshold are skipped.
+  * **Default**: `1048576` (1 MB)
 
 #### Editor Configuration Example
 
