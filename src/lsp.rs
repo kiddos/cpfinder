@@ -10,10 +10,11 @@ use crate::finder::{
     compute_ignore_path, detect_cp_in_content, index_content, path_starts_with, SourceType, TrieNode,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LspConfig {
     pub min_line_count: usize,
     pub min_char_count: usize,
+    pub max_file_size: usize,
     pub ignore_folders: String,
 }
 
@@ -22,6 +23,7 @@ impl Default for LspConfig {
         Self {
             min_line_count: 6,
             min_char_count: 80,
+            max_file_size: 1_048_576,
             ignore_folders: "thirdparty,test,node_modules,target,.git".to_string(),
         }
     }
@@ -36,11 +38,15 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(client: Client) -> Self {
+        Self::with_config(client, LspConfig::default())
+    }
+
+    pub fn with_config(client: Client, config: LspConfig) -> Self {
         Self {
             client,
             documents: Arc::default(),
             workspace_folders: Arc::default(),
-            config: Arc::default(),
+            config: Arc::new(RwLock::new(config)),
         }
     }
 
@@ -61,6 +67,11 @@ impl Backend {
                         let path_str = entry.display().to_string();
                         if path_starts_with(&path_str, &ignore_paths) {
                             continue;
+                        }
+                        if let Ok(metadata) = std::fs::metadata(&entry) {
+                            if metadata.len() as usize > config.max_file_size {
+                                continue;
+                            }
                         }
                         if let Ok(content) = std::fs::read_to_string(&entry) {
                             disk_files.insert(entry, content);
@@ -84,7 +95,9 @@ impl Backend {
         // Build global trie
         let mut root = TrieNode::new();
         for content in all_files.values() {
-            index_content(content, &mut root);
+            if content.len() <= config.max_file_size {
+                index_content(content, &mut root);
+            }
         }
 
         // Generate diagnostics for all open documents (and files in workspace)
@@ -92,6 +105,11 @@ impl Backend {
             // Only publish diagnostics for documents that are currently open or part of workspace
             let is_open = documents.contains_key(url);
             if !is_open {
+                continue;
+            }
+
+            if content.len() > config.max_file_size {
+                self.client.publish_diagnostics(url.clone(), vec![], None).await;
                 continue;
             }
 
@@ -167,6 +185,22 @@ impl LanguageServer for Backend {
             *wf = folders;
         }
 
+        if let Some(options) = params.initialization_options {
+            let mut config = self.config.write().await;
+            if let Some(val) = options.get("max_file_size").and_then(|v| v.as_u64()) {
+                config.max_file_size = val as usize;
+            }
+            if let Some(val) = options.get("min_line_count").and_then(|v| v.as_u64()) {
+                config.min_line_count = val as usize;
+            }
+            if let Some(val) = options.get("min_char_count").and_then(|v| v.as_u64()) {
+                config.min_char_count = val as usize;
+            }
+            if let Some(val) = options.get("ignore_folders").and_then(|v| v.as_str()) {
+                config.ignore_folders = val.to_string();
+            }
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -228,9 +262,13 @@ impl LanguageServer for Backend {
 }
 
 pub async fn run_lsp_server() {
+    run_lsp_server_with_config(LspConfig::default()).await;
+}
+
+pub async fn run_lsp_server_with_config(config: LspConfig) {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| Backend::new(client));
+    let (service, socket) = LspService::new(move |client| Backend::with_config(client, config.clone()));
     Server::new(stdin, stdout, socket).serve(service).await;
 }

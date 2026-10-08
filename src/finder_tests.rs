@@ -70,4 +70,13 @@ fn function_b() {
         let locs_b = detect_cp_in_content("file_b.rs", code_b, &trie, 3, 20);
         assert!(!locs_b.is_empty());
     }
+
+    #[test]
+    fn test_lsp_config_defaults() {
+        use crate::lsp::LspConfig;
+        let config = LspConfig::default();
+        assert_eq!(config.max_file_size, 1_048_576);
+        assert_eq!(config.min_line_count, 6);
+        assert_eq!(config.min_char_count, 80);
+    }
 }
