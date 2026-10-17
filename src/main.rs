@@ -17,14 +17,14 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 6,
+        default_value_t = 10,
         help = "minimum number of lines to considered as copy paste"
     )]
     min_line_count: usize,
 
     #[arg(
         long,
-        default_value_t = 80,
+        default_value_t = 120,
         help = "minimum characters to considered as copy paste"
     )]
     min_char_count: usize,

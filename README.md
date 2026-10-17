@@ -23,9 +23,9 @@ Arguments:
 
 Options:
       --min-line-count <MIN_LINE_COUNT>
-          minimum number of lines to considered as copy paste [default: 6]
+          minimum number of lines to considered as copy paste [default: 10]
       --min-char-count <MIN_CHAR_COUNT>
-          minimum characters to considered as copy paste [default: 80]
+          minimum characters to considered as copy paste [default: 120]
       --ignore-folders <IGNORE_FOLDERS>
           folders to ignore [default: thirdparty,test,node_modules]
       --list-source-folder
@@ -66,14 +66,23 @@ When running in LSP mode, `cpfinder`:
 The LSP server uses the following default detection settings:
 
 * **`--min-line-count`**: Minimum number of consecutive identical lines required to trigger a duplicate warning.
-  * **Default**: `6`
+  * **Default**: `10`
 * **`--min-char-count`**: Minimum total characters across duplicate lines required to trigger a duplicate warning.
-  * **Default**: `80`
+  * **Default**: `120`
 * **`--ignore-folders`**: Comma-separated folder names/patterns to exclude from scanning.
   * **CLI Default**: `thirdparty,test,node_modules`
   * **LSP Default Ignored Folders**: `thirdparty,test,node_modules,target,.git`
 * **`max_file_size`**: Maximum file size in bytes to index and analyze in LSP mode. Files larger than this threshold are skipped.
   * **Default**: `1048576` (1 MB)
+
+#### Custom RPC Methods
+
+Clients can control diagnostic publishing dynamically using custom LSP JSON-RPC methods:
+
+* **`cpfinder/disableDiagnostics`**: Disables diagnostic generation and clears existing diagnostics from all open documents.
+* **`cpfinder/enableDiagnostics`**: Re-enables diagnostic generation and scans active documents.
+* **`cpfinder/toggleDiagnostics`**: Toggles diagnostic generation on/off.
+* **`cpfinder/setDiagnosticsEnabled`**: Sets diagnostic generation enabled state given a boolean parameter (`[true]` or `[false]`).
 
 #### Editor Configuration Example
 
