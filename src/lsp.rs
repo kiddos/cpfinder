@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -21,8 +22,8 @@ pub struct LspConfig {
 impl Default for LspConfig {
     fn default() -> Self {
         Self {
-            min_line_count: 6,
-            min_char_count: 80,
+            min_line_count: 10,
+            min_char_count: 120,
             max_file_size: 1_048_576,
             ignore_folders: "thirdparty,test,node_modules,target,.git".to_string(),
         }
@@ -34,6 +35,7 @@ pub struct Backend {
     documents: Arc<RwLock<HashMap<Url, String>>>,
     workspace_folders: Arc<RwLock<Vec<PathBuf>>>,
     config: Arc<RwLock<LspConfig>>,
+    diagnostics_enabled: Arc<AtomicBool>,
 }
 
 impl Backend {
@@ -47,11 +49,62 @@ impl Backend {
             documents: Arc::default(),
             workspace_folders: Arc::default(),
             config: Arc::new(RwLock::new(config)),
+            diagnostics_enabled: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    pub fn is_diagnostics_enabled(&self) -> bool {
+        self.diagnostics_enabled.load(Ordering::Relaxed)
+    }
+
+    pub async fn set_diagnostics_enabled(&self, enabled: bool) {
+        self.diagnostics_enabled.store(enabled, Ordering::Relaxed);
+        self.scan_and_publish_diagnostics().await;
+    }
+
+    pub async fn disable_diagnostics(&self) {
+        self.set_diagnostics_enabled(false).await;
+    }
+
+    pub async fn enable_diagnostics(&self) {
+        self.set_diagnostics_enabled(true).await;
+    }
+
+    pub async fn toggle_diagnostics(&self) -> bool {
+        let new_state = !self.is_diagnostics_enabled();
+        self.set_diagnostics_enabled(new_state).await;
+        new_state
+    }
+
+    pub async fn disable_diagnostics_rpc(&self, _: ()) -> Result<bool> {
+        self.disable_diagnostics().await;
+        Ok(false)
+    }
+
+    pub async fn enable_diagnostics_rpc(&self, _: ()) -> Result<bool> {
+        self.enable_diagnostics().await;
+        Ok(true)
+    }
+
+    pub async fn toggle_diagnostics_rpc(&self, _: ()) -> Result<bool> {
+        let res = self.toggle_diagnostics().await;
+        Ok(res)
+    }
+
+    pub async fn set_diagnostics_enabled_rpc(&self, params: (bool,)) -> Result<bool> {
+        self.set_diagnostics_enabled(params.0).await;
+        Ok(params.0)
     }
 
     async fn scan_and_publish_diagnostics(&self) {
         let documents = self.documents.read().await;
+
+        if !self.is_diagnostics_enabled() {
+            for url in documents.keys() {
+                self.client.publish_diagnostics(url.clone(), vec![], None).await;
+            }
+            return;
+        }
         let workspace_folders = self.workspace_folders.read().await;
         let config = self.config.read().await;
 
@@ -233,6 +286,7 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
+
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
@@ -269,6 +323,11 @@ pub async fn run_lsp_server_with_config(config: LspConfig) {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(move |client| Backend::with_config(client, config.clone()));
+    let (service, socket) = LspService::build(move |client| Backend::with_config(client, config.clone()))
+        .custom_method("cpfinder/disableDiagnostics", Backend::disable_diagnostics_rpc)
+        .custom_method("cpfinder/enableDiagnostics", Backend::enable_diagnostics_rpc)
+        .custom_method("cpfinder/toggleDiagnostics", Backend::toggle_diagnostics_rpc)
+        .custom_method("cpfinder/setDiagnosticsEnabled", Backend::set_diagnostics_enabled_rpc)
+        .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }

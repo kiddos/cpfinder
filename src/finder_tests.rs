@@ -229,8 +229,8 @@ fn function_b() {
         use crate::lsp::LspConfig;
         let config = LspConfig::default();
         assert_eq!(config.max_file_size, 1_048_576);
-        assert_eq!(config.min_line_count, 6);
-        assert_eq!(config.min_char_count, 80);
+        assert_eq!(config.min_line_count, 10);
+        assert_eq!(config.min_char_count, 120);
         assert_eq!(config.ignore_folders, "thirdparty,test,node_modules,target,.git");
     }
 
@@ -383,5 +383,48 @@ fn function_b() {
             .await;
 
         let _ = remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_lsp_diagnostics_disable_enable_rpc() {
+        use tower_lsp::LspService;
+        use crate::lsp::{Backend, LspConfig};
+
+        let config = LspConfig {
+            min_line_count: 3,
+            min_char_count: 10,
+            max_file_size: 1024,
+            ignore_folders: "target".to_string(),
+        };
+
+        let (service, _socket) = LspService::build(|client| Backend::with_config(client, config))
+            .custom_method("cpfinder/disableDiagnostics", Backend::disable_diagnostics_rpc)
+            .custom_method("cpfinder/enableDiagnostics", Backend::enable_diagnostics_rpc)
+            .custom_method("cpfinder/toggleDiagnostics", Backend::toggle_diagnostics_rpc)
+            .custom_method("cpfinder/setDiagnosticsEnabled", Backend::set_diagnostics_enabled_rpc)
+            .finish();
+
+        let backend = service.inner();
+
+        assert!(backend.is_diagnostics_enabled());
+
+        // Test RPC methods directly
+        assert_eq!(backend.disable_diagnostics_rpc(()).await.unwrap(), false);
+        assert!(!backend.is_diagnostics_enabled());
+
+        assert_eq!(backend.enable_diagnostics_rpc(()).await.unwrap(), true);
+        assert!(backend.is_diagnostics_enabled());
+
+        assert_eq!(backend.toggle_diagnostics_rpc(()).await.unwrap(), false);
+        assert!(!backend.is_diagnostics_enabled());
+
+        assert_eq!(backend.toggle_diagnostics_rpc(()).await.unwrap(), true);
+        assert!(backend.is_diagnostics_enabled());
+
+        assert_eq!(backend.set_diagnostics_enabled_rpc((false,)).await.unwrap(), false);
+        assert!(!backend.is_diagnostics_enabled());
+
+        assert_eq!(backend.set_diagnostics_enabled_rpc((true,)).await.unwrap(), true);
+        assert!(backend.is_diagnostics_enabled());
     }
 }
