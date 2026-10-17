@@ -388,6 +388,7 @@ fn function_b() {
     #[tokio::test]
     async fn test_lsp_diagnostics_disable_enable_rpc() {
         use tower_lsp::LspService;
+        use serde_json::json;
         use crate::lsp::{Backend, LspConfig};
 
         let config = LspConfig {
@@ -400,31 +401,27 @@ fn function_b() {
         let (service, _socket) = LspService::build(|client| Backend::with_config(client, config))
             .custom_method("cpfinder/disableDiagnostics", Backend::disable_diagnostics_rpc)
             .custom_method("cpfinder/enableDiagnostics", Backend::enable_diagnostics_rpc)
-            .custom_method("cpfinder/toggleDiagnostics", Backend::toggle_diagnostics_rpc)
-            .custom_method("cpfinder/setDiagnosticsEnabled", Backend::set_diagnostics_enabled_rpc)
+            .custom_method("cpfinder/setMinLineCount", Backend::set_min_line_count_rpc)
+            .custom_method("cpfinder/setMinCharCount", Backend::set_min_char_count_rpc)
             .finish();
 
         let backend = service.inner();
 
         assert!(backend.is_diagnostics_enabled());
 
-        // Test RPC methods directly
+        // Test enable / disable RPC methods directly
         assert_eq!(backend.disable_diagnostics_rpc(()).await.unwrap(), false);
         assert!(!backend.is_diagnostics_enabled());
 
         assert_eq!(backend.enable_diagnostics_rpc(()).await.unwrap(), true);
         assert!(backend.is_diagnostics_enabled());
 
-        assert_eq!(backend.toggle_diagnostics_rpc(()).await.unwrap(), false);
-        assert!(!backend.is_diagnostics_enabled());
+        // Test setMinLineCount with integer Value or Object Value
+        assert_eq!(backend.set_min_line_count_rpc((json!(15),)).await.unwrap(), 15);
+        assert_eq!(backend.set_min_line_count_rpc((json!({"min_line_count": 20}),)).await.unwrap(), 20);
 
-        assert_eq!(backend.toggle_diagnostics_rpc(()).await.unwrap(), true);
-        assert!(backend.is_diagnostics_enabled());
-
-        assert_eq!(backend.set_diagnostics_enabled_rpc((false,)).await.unwrap(), false);
-        assert!(!backend.is_diagnostics_enabled());
-
-        assert_eq!(backend.set_diagnostics_enabled_rpc((true,)).await.unwrap(), true);
-        assert!(backend.is_diagnostics_enabled());
+        // Test setMinCharCount with integer Value or Object Value
+        assert_eq!(backend.set_min_char_count_rpc((json!(200),)).await.unwrap(), 200);
+        assert_eq!(backend.set_min_char_count_rpc((json!({"min_char_count": 250}),)).await.unwrap(), 250);
     }
 }

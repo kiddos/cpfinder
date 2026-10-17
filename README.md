@@ -81,8 +81,8 @@ Clients can control diagnostic publishing dynamically using custom LSP JSON-RPC 
 
 * **`cpfinder/disableDiagnostics`**: Disables diagnostic generation and clears existing diagnostics from all open documents.
 * **`cpfinder/enableDiagnostics`**: Re-enables diagnostic generation and scans active documents.
-* **`cpfinder/toggleDiagnostics`**: Toggles diagnostic generation on/off.
-* **`cpfinder/setDiagnosticsEnabled`**: Sets diagnostic generation enabled state given a boolean parameter (`[true]` or `[false]`).
+* **`cpfinder/setMinLineCount`**: Sets the minimum line count threshold required to trigger duplicate code detection.
+* **`cpfinder/setMinCharCount`**: Sets the minimum character count threshold required to trigger duplicate code detection.
 
 #### Editor Configuration Example
 
