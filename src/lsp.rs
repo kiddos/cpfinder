@@ -70,12 +70,6 @@ impl Backend {
         self.set_diagnostics_enabled(true).await;
     }
 
-    pub async fn toggle_diagnostics(&self) -> bool {
-        let new_state = !self.is_diagnostics_enabled();
-        self.set_diagnostics_enabled(new_state).await;
-        new_state
-    }
-
     pub async fn disable_diagnostics_rpc(&self, _: ()) -> Result<bool> {
         self.disable_diagnostics().await;
         Ok(false)
@@ -86,14 +80,36 @@ impl Backend {
         Ok(true)
     }
 
-    pub async fn toggle_diagnostics_rpc(&self, _: ()) -> Result<bool> {
-        let res = self.toggle_diagnostics().await;
-        Ok(res)
+    pub async fn set_min_line_count_rpc(&self, params: (serde_json::Value,)) -> Result<usize> {
+        let val = if let Some(n) = params.0.as_u64() {
+            n as usize
+        } else if let Some(n) = params.0.get("min_line_count").and_then(|v| v.as_u64()) {
+            n as usize
+        } else {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Expected integer or object with min_line_count",
+            ));
+        };
+
+        self.config.write().await.min_line_count = val;
+        self.scan_and_publish_diagnostics().await;
+        Ok(val)
     }
 
-    pub async fn set_diagnostics_enabled_rpc(&self, params: (bool,)) -> Result<bool> {
-        self.set_diagnostics_enabled(params.0).await;
-        Ok(params.0)
+    pub async fn set_min_char_count_rpc(&self, params: (serde_json::Value,)) -> Result<usize> {
+        let val = if let Some(n) = params.0.as_u64() {
+            n as usize
+        } else if let Some(n) = params.0.get("min_char_count").and_then(|v| v.as_u64()) {
+            n as usize
+        } else {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Expected integer or object with min_char_count",
+            ));
+        };
+
+        self.config.write().await.min_char_count = val;
+        self.scan_and_publish_diagnostics().await;
+        Ok(val)
     }
 
     async fn scan_and_publish_diagnostics(&self) {
@@ -326,8 +342,8 @@ pub async fn run_lsp_server_with_config(config: LspConfig) {
     let (service, socket) = LspService::build(move |client| Backend::with_config(client, config.clone()))
         .custom_method("cpfinder/disableDiagnostics", Backend::disable_diagnostics_rpc)
         .custom_method("cpfinder/enableDiagnostics", Backend::enable_diagnostics_rpc)
-        .custom_method("cpfinder/toggleDiagnostics", Backend::toggle_diagnostics_rpc)
-        .custom_method("cpfinder/setDiagnosticsEnabled", Backend::set_diagnostics_enabled_rpc)
+        .custom_method("cpfinder/setMinLineCount", Backend::set_min_line_count_rpc)
+        .custom_method("cpfinder/setMinCharCount", Backend::set_min_char_count_rpc)
         .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
