@@ -2,8 +2,8 @@
 name = "cpfinder"
 version = "0.1.0"
 edition = "2021"
-author = "kiddos"
-about = "copy paste finder"
+description = "A Language Server Protocol (LSP) implementation for buffer, path, tmux, snippets completion."
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
