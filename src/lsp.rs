@@ -163,9 +163,9 @@ impl Backend {
 
         // Build global trie
         let mut root = TrieNode::new();
-        for content in all_files.values() {
+        for (url, content) in all_files.iter() {
             if content.len() <= config.max_file_size {
-                index_content(content, &mut root);
+                index_content(url.path(), content, &mut root);
             }
         }
 

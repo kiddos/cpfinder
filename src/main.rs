@@ -3,7 +3,10 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use colored::*;
-use cpfinder::finder::{compute_ignore_path, parse, scan_folders, CPLocation, SourceType, TrieNode};
+use std::collections::HashMap;
+use cpfinder::finder::{
+    compute_ignore_path, group_cp_locations, parse, scan_folders, CPLocation, SourceType, TrieNode,
+};
 use cpfinder::lsp::run_lsp_server;
 
 #[derive(Parser, Debug)]
@@ -90,8 +93,13 @@ async fn main() {
 
     let mut root = TrieNode::new();
     let mut cp_locations: Vec<CPLocation> = Vec::new();
+    let mut file_contents: HashMap<String, String> = HashMap::new();
+
     if n > 0 {
         for source_file in &source_files {
+            if let Ok(content) = std::fs::read_to_string(source_file) {
+                file_contents.insert(source_file.clone(), content);
+            }
             parse(
                 source_file,
                 &mut root,
@@ -103,15 +111,21 @@ async fn main() {
         }
     }
 
-    cp_locations.sort_by_key(|l| l.end - l.start + 1);
-    cp_locations.reverse();
+    let clone_groups = group_cp_locations(&cp_locations, &file_contents);
+
     println!("top {} result:", args.list_top_result.to_string().blue());
-    for l in &cp_locations[0..min(cp_locations.len(), args.list_top_result)] {
-        println!(
-            "{}: line {}~{}",
-            l.filepath.red(),
-            l.start.to_string().purple(),
-            l.end.to_string().purple()
-        );
+    for group in &clone_groups[0..min(clone_groups.len(), args.list_top_result)] {
+        let loc_strs: Vec<String> = group
+            .locations
+            .iter()
+            .map(|l| {
+                format!(
+                    "{} (lines {})",
+                    l.filepath.red(),
+                    format!("{}-{}", l.start, l.end).purple()
+                )
+            })
+            .collect();
+        println!("Clone Group: {}", loc_strs.join(" and "));
     }
 }

@@ -54,7 +54,7 @@ impl std::fmt::Display for SourceType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CPLocation {
     pub filepath: String,
     pub start: usize,
@@ -63,10 +63,18 @@ pub struct CPLocation {
     pub char_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloneGroup {
+    pub locations: Vec<CPLocation>,
+    pub line_count: usize,
+    pub char_count: usize,
+}
+
 #[derive(Default, Debug)]
 pub struct TrieNode {
     pub children: HashMap<char, TrieNode>,
     pub occurence: usize,
+    pub locations: Vec<(String, usize)>, // (filepath, line_number)
 }
 
 impl TrieNode {
@@ -74,7 +82,7 @@ impl TrieNode {
         Self::default()
     }
 
-    pub fn insert(&mut self, word: &str) -> usize {
+    pub fn insert(&mut self, word: &str, filepath: &str, line_num: usize) -> usize {
         let mut node = self;
         for char in word.chars() {
             let next_node = node.children.entry(char).or_insert_with(TrieNode::new);
@@ -82,6 +90,7 @@ impl TrieNode {
         }
 
         node.occurence += 1;
+        node.locations.push((filepath.to_string(), line_num));
         node.occurence
     }
 
@@ -95,6 +104,18 @@ impl TrieNode {
             }
         }
         node.occurence
+    }
+
+    pub fn get_node(&self, word: &str) -> Option<&TrieNode> {
+        let mut node = self;
+        for char in word.chars() {
+            if let Some(next_node) = node.children.get(&char) {
+                node = next_node;
+            } else {
+                return None;
+            }
+        }
+        Some(node)
     }
 }
 
@@ -204,12 +225,13 @@ pub fn is_comment_or_empty(line: &str, in_multiline_comment: &mut bool) -> bool 
     false
 }
 
-pub fn index_content(content: &str, root: &mut TrieNode) {
+pub fn index_content(filepath: &str, content: &str, root: &mut TrieNode) {
     let mut in_multiline_comment = false;
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
+        let line_num = idx + 1;
         let trimmed = line.trim();
         if !is_comment_or_empty(line, &mut in_multiline_comment) {
-            root.insert(trimmed);
+            root.insert(trimmed, filepath, line_num);
         }
     }
 }
@@ -277,6 +299,157 @@ pub fn detect_cp_in_content(
     cp_locations
 }
 
+pub fn group_cp_locations(
+    cp_locations: &[CPLocation],
+    files: &HashMap<String, String>,
+) -> Vec<CloneGroup> {
+    use std::collections::HashSet;
+
+    let mut cp_map: HashMap<(String, usize), &CPLocation> = HashMap::new();
+    for loc in cp_locations {
+        for line in loc.start..=loc.end {
+            cp_map.insert((loc.filepath.clone(), line), loc);
+        }
+    }
+
+    let mut visited: HashSet<(CPLocation, CPLocation)> = HashSet::new();
+    let mut clone_groups: Vec<CloneGroup> = Vec::new();
+
+    for loc_a in cp_locations {
+        let content_a = match files.get(&loc_a.filepath) {
+            Some(c) => c,
+            None => continue,
+        };
+        let lines_a: Vec<&str> = content_a.lines().collect();
+
+        for line_a_num in loc_a.start..=loc_a.end {
+            if line_a_num > lines_a.len() {
+                continue;
+            }
+            let line_a_str = lines_a[line_a_num - 1].trim();
+            let mut in_comm = false;
+            if is_comment_or_empty(line_a_str, &mut in_comm) {
+                continue;
+            }
+
+            for loc_b in cp_locations {
+                if loc_a == loc_b {
+                    continue;
+                }
+                if visited.contains(&(loc_a.clone(), loc_b.clone()))
+                    || visited.contains(&(loc_b.clone(), loc_a.clone()))
+                {
+                    continue;
+                }
+
+                let content_b = match files.get(&loc_b.filepath) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let lines_b: Vec<&str> = content_b.lines().collect();
+
+                for line_b_num in loc_b.start..=loc_b.end {
+                    if line_b_num > lines_b.len() {
+                        continue;
+                    }
+                    let line_b_str = lines_b[line_b_num - 1].trim();
+
+                    if line_a_str == line_b_str {
+                        let mut offset = 0;
+                        let mut match_len = 0;
+                        let mut match_chars = 0;
+
+                        while line_a_num + offset <= loc_a.end && line_b_num + offset <= loc_b.end {
+                            let idx_a = line_a_num + offset - 1;
+                            let idx_b = line_b_num + offset - 1;
+                            if idx_a >= lines_a.len() || idx_b >= lines_b.len() {
+                                break;
+                            }
+                            let str_a = lines_a[idx_a].trim();
+                            let str_b = lines_b[idx_b].trim();
+
+                            let mut comm_a = false;
+                            let empty_a = is_comment_or_empty(str_a, &mut comm_a);
+                            let mut comm_b = false;
+                            let empty_b = is_comment_or_empty(str_b, &mut comm_b);
+
+                            if empty_a && empty_b {
+                                offset += 1;
+                                match_len += 1;
+                                continue;
+                            }
+
+                            if str_a == str_b {
+                                offset += 1;
+                                match_len += 1;
+                                match_chars += str_a.len();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if match_len >= loc_a.line_count.min(loc_b.line_count) / 2 || match_len >= 3 {
+                            let match_loc_a = CPLocation {
+                                filepath: loc_a.filepath.clone(),
+                                start: line_a_num,
+                                end: line_a_num + match_len - 1,
+                                line_count: match_len,
+                                char_count: match_chars,
+                            };
+                            let match_loc_b = CPLocation {
+                                filepath: loc_b.filepath.clone(),
+                                start: line_b_num,
+                                end: line_b_num + match_len - 1,
+                                line_count: match_len,
+                                char_count: match_chars,
+                            };
+
+                            let mut group_locs = vec![match_loc_a, match_loc_b];
+                            group_locs.sort_by(|x, y| x.filepath.cmp(&y.filepath).then(x.start.cmp(&y.start)));
+
+                            clone_groups.push(CloneGroup {
+                                locations: group_locs,
+                                line_count: match_len,
+                                char_count: match_chars,
+                            });
+
+                            visited.insert((loc_a.clone(), loc_b.clone()));
+                            visited.insert((loc_b.clone(), loc_a.clone()));
+                            break;
+                        }
+                    }
+                }
+
+                if visited.contains(&(loc_a.clone(), loc_b.clone())) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if clone_groups.is_empty() && cp_locations.len() >= 2 {
+        for i in 0..cp_locations.len() {
+            for j in (i + 1)..cp_locations.len() {
+                let loc_a = &cp_locations[i];
+                let loc_b = &cp_locations[j];
+                let line_cnt = loc_a.line_count.min(loc_b.line_count);
+                let char_cnt = loc_a.char_count.min(loc_b.char_count);
+                let mut group_locs = vec![loc_a.clone(), loc_b.clone()];
+                group_locs.sort_by(|x, y| x.filepath.cmp(&y.filepath).then(x.start.cmp(&y.start)));
+                clone_groups.push(CloneGroup {
+                    locations: group_locs,
+                    line_count: line_cnt,
+                    char_count: char_cnt,
+                });
+            }
+        }
+    }
+
+    clone_groups.sort_by_key(|g| g.line_count);
+    clone_groups.reverse();
+    clone_groups
+}
+
 pub fn parse(
     filepath: &str,
     root: &mut TrieNode,
@@ -285,7 +458,7 @@ pub fn parse(
     min_char_count: usize,
 ) -> io::Result<()> {
     let content = std::fs::read_to_string(filepath)?;
-    index_content(&content, root);
+    index_content(filepath, &content, root);
     let mut locs = detect_cp_in_content(filepath, &content, root, min_line_count, min_char_count);
     cp_locations.append(&mut locs);
     Ok(())

@@ -36,10 +36,10 @@ mod tests {
         let mut trie = TrieNode::new();
         assert_eq!(trie.get_occurrence("hello"), 0);
 
-        trie.insert("hello");
+        trie.insert("hello", "file_a.rs", 1);
         assert_eq!(trie.get_occurrence("hello"), 1);
 
-        trie.insert("hello");
+        trie.insert("hello", "file_b.rs", 5);
         assert_eq!(trie.get_occurrence("hello"), 2);
 
         // Querying prefix of inserted word should return 0
@@ -49,11 +49,11 @@ mod tests {
         assert_eq!(trie.get_occurrence("world"), 0);
 
         // Test empty string insertion
-        trie.insert("");
+        trie.insert("", "file_a.rs", 2);
         assert_eq!(trie.get_occurrence(""), 1);
 
         // Test special characters & unicode
-        trie.insert("let x = 🦀;");
+        trie.insert("let x = 🦀;", "file_a.rs", 3);
         assert_eq!(trie.get_occurrence("let x = 🦀;"), 1);
     }
 
@@ -146,8 +146,8 @@ fn function_b() {
 "#;
 
         let mut trie = TrieNode::new();
-        index_content(code_a, &mut trie);
-        index_content(code_b, &mut trie);
+        index_content("file_a.rs", code_a, &mut trie);
+        index_content("file_b.rs", code_b, &mut trie);
 
         let locs_a = detect_cp_in_content("file_a.rs", code_a, &trie, 3, 20);
         assert_eq!(locs_a.len(), 1);
@@ -172,8 +172,8 @@ fn function_b() {
         // Test duplicate detection when duplicate occurs at the end of file (EOF)
         let code = "line1();\nline2();\nline3();";
         let mut trie = TrieNode::new();
-        index_content(code, &mut trie);
-        index_content(code, &mut trie);
+        index_content("eof.rs", code, &mut trie);
+        index_content("other.rs", code, &mut trie);
 
         let locs = detect_cp_in_content("eof.rs", code, &trie, 3, 10);
         assert_eq!(locs.len(), 1);
@@ -222,6 +222,39 @@ fn function_b() {
 
         // Cleanup
         let _ = remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_group_cp_locations() {
+        use std::collections::HashMap;
+
+        let code_a = "header\nline1\nline2\nline3\nline4\nfooter";
+        let code_b = "prefix\nprefix2\nline1\nline2\nline3\nline4\nsuffix";
+
+        let mut trie = TrieNode::new();
+        index_content("file_a.rs", code_a, &mut trie);
+        index_content("file_b.rs", code_b, &mut trie);
+
+        let locs_a = detect_cp_in_content("file_a.rs", code_a, &trie, 3, 10);
+        let locs_b = detect_cp_in_content("file_b.rs", code_b, &trie, 3, 10);
+
+        let mut all_locs = locs_a;
+        all_locs.extend(locs_b);
+
+        let mut file_contents = HashMap::new();
+        file_contents.insert("file_a.rs".to_string(), code_a.to_string());
+        file_contents.insert("file_b.rs".to_string(), code_b.to_string());
+
+        let groups = group_cp_locations(&all_locs, &file_contents);
+        assert!(!groups.is_empty());
+        let group = &groups[0];
+        assert_eq!(group.locations.len(), 2);
+        assert_eq!(group.locations[0].filepath, "file_a.rs");
+        assert_eq!(group.locations[0].start, 2);
+        assert_eq!(group.locations[0].end, 5);
+        assert_eq!(group.locations[1].filepath, "file_b.rs");
+        assert_eq!(group.locations[1].start, 3);
+        assert_eq!(group.locations[1].end, 6);
     }
 
     #[test]
